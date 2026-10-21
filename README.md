@@ -15,15 +15,16 @@ pack.
 | **Node Controller** | toggles individual nodes, by **id** | nodes as `id: Title` |
 | **Tag Controller** | toggles **any set of nodes**, by a shared **tag** | the tags in use in your graph |
 | **Wired Controller** | relays booleans to Controllers, by **signal name** | - |
+| **Set** / **Get** | tunnel **any-type** data by name, no wire needed | - |
 | **Value on Boolean** | boolean -> one of two values (float/int/string) | - |
 | **Boolean Switch** | routes one of two **any-type** inputs, lazily | - |
 | **Execution Gate** | blocks every node downstream when a **runtime-computed** boolean is False | - |
 
 The four Controllers are client-side (they toggle node modes in the browser);
-the three utilities are real backend nodes (they move data, or block it, at
-runtime). See [Tag Controller](#tag-controller),
-[Wired Controller](#wired-controller) and
-[Bundled boolean utilities](#bundled-boolean-utilities).
+Set/Get are client-side too but carry data, not mode; the three backend
+utilities move data (or block it) at runtime. See
+[Tag Controller](#tag-controller), [Wired Controller](#wired-controller),
+[Set / Get](#set--get) and [Bundled boolean utilities](#bundled-boolean-utilities).
 
 ## Install
 
@@ -82,6 +83,39 @@ Tags are stored on the node itself (`properties.switchboardTags`), so they
 survive save/load and aren't tied to any one Controller - the same tag can
 drive several Tag Controllers, and a node keeps its tags even with no
 Controller targeting them yet.
+
+**If 🎛️ Tag… doesn't show up on some node:** it's added through two
+independent paths on purpose, because some other installed custom-node pack
+can monkey-patch a node's context menu without chaining the previous
+implementation (not every pack does this carefully), which would otherwise
+silently drop our menu item for just that node type. If it's still missing
+everywhere after updating, that points at something more specific - open an
+issue with the node type it's missing on.
+
+## Set / Get
+
+A plain wiring convenience, not a Controller - it doesn't toggle anything.
+**Set** takes any input and gives it a name; **Get** outputs whatever the Set
+with that name is holding, anywhere else in the graph. No wire between them.
+Useful once a graph is big enough that routing a model/latent/conditioning
+across it means a long, backtracking wire - name it once, grab it wherever
+you need it instead.
+
+- **Set**: one `*` input, a `name` text field. Connect anything, type a name.
+  Two Sets can't share a name - a clash gets `_2`, `_3`, ... appended
+  automatically, so a Get's match is never ambiguous.
+- **Get**: one `*` output, a `name` dropdown listing every Set currently in
+  the graph. Pick one; the output's type and the node's title
+  (`Get: <name>`) update to match. Picking a name with no matching Set (or one
+  that gets removed/renamed later) shows `(missing)` and queuing the prompt
+  errors with exactly which name is unresolved, rather than silently sending
+  bad data.
+- Both are virtual (front-end only, like the Controllers) - at queue time, a
+  Get resolves straight to the Set's real upstream link, so the backend sees
+  a normal direct connection either way. A Get feeding another Get/Set chains
+  through the same mechanism with no special handling needed.
+- Scoped to **one graph/subgraph**, same as every other target in this pack -
+  a Set inside a subgraph isn't visible to a Get outside it (or vice versa).
 
 ## Putting it together - complex conditional control
 
@@ -328,8 +362,14 @@ to that project. Changes made in this fork:
 
 - Added the **Tag Controller** (toggle any scattered set of nodes by a shared
   tag, not just one group/node) - see [above](#tag-controller).
+- Added **Set**/**Get** (tunnel any-type data by name, no wire) - see
+  [above](#set--get).
 - Added the **Execution Gate** backend node (runtime-computed boolean gating
   via `ExecutionBlocker`) - see [above](#execution-gate).
+- Hardened the Tag… context-menu item against being silently dropped by
+  another installed pack's non-chaining menu patch, by adding it through a
+  second, independent canvas-level path as well - see the note at the end of
+  [Tag Controller](#tag-controller).
 - Hardened `.github/workflows/release.yml`: dropped the Comfy-Registry publish
   job (it published under the upstream author's `PublisherId`, which this fork
   has no claim to and no token for), and moved from a blanket top-level
@@ -369,13 +409,14 @@ if they aren't specific to the changes above.
 
 ## Nodes 2.0 compatibility
 
-The four **Controllers** (Group, Node, Tag and Wired) are client-side (virtual)
-nodes built on the legacy LiteGraph API - the same class of node as rgthree's
-group tools. (The **Value on Boolean** and **Boolean Switch** utilities are
-ordinary backend nodes and aren't affected by any of this.) ComfyUI's **Nodes 2.0** (Vue renderer) is currently
-opt-in and keeps a compatibility layer, so the Controllers load and function
-there (toggles, booleans and queue-time apply all work). Caveats for the
-Controllers:
+The four **Controllers** (Group, Node, Tag and Wired), plus **Set**/**Get**,
+are client-side (virtual) nodes built on the legacy LiteGraph API - the same
+class of node as rgthree's group tools. (The **Value on Boolean**, **Boolean
+Switch** and **Execution Gate** utilities are ordinary backend nodes and
+aren't affected by any of this.) ComfyUI's **Nodes 2.0** (Vue renderer) is
+currently opt-in and keeps a compatibility layer, so the Controllers load and
+function there (toggles, booleans and queue-time apply all work). Caveats for
+the Controllers:
 
 - The **core action** (setting nodes to active/bypass/mute) is graph data, not
   rendering - it works regardless of renderer.

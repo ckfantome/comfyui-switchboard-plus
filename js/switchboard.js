@@ -1479,6 +1479,189 @@ class WiredControllerNode extends LGraphNode {
 }
 WiredControllerNode.nodeTitle = "Wired Controller";
 
+// ---- Set / Get (any-type tunnel) -------------------------------------------
+//
+// Not a Controller -- a plain wiring convenience, in the spirit of the
+// Set/Get pairs several other packs ship (e.g. ComfyUI-Easy-Use's
+// "easy setNode"/"easy getNode"). Lets a value of ANY type (image, latent,
+// model, conditioning, ...) reach a distant part of the graph by NAME instead
+// of a long wire, which is the readability problem in a big, branchy graph
+// that tags/groups don't solve -- those gate *execution*, this threads *data*.
+//
+// Both are virtual: Get resolves to the real upstream link at serialize time
+// via `getInputLink`, litegraph's own mechanism for a virtual node to stand in
+// for a real one (confirmed against the shipped frontend: the executor calls
+// `node.getInputLink(slot)` and recurses through `.resolve()` on whatever it
+// gets back). Handing back the Setter's own (unmodified, already-real) input
+// link -- rather than building a new link object -- is what makes this work
+// without depending on a specific Link class shape, and it's why a Get can sit
+// downstream of another Get/Set with no special-case chaining code: each hop
+// resolves through the exact same call.
+
+/** Every name currently claimed by a Switchboard Set node in `graph`. */
+function getSwitchboardSetterNames(graph) {
+  const names = new Set();
+  for (const node of getGraphNodes(graph)) {
+    if (node.constructor && node.constructor.isSwitchboardSetNode) {
+      const name = node.widgets?.[0]?.value;
+      if (name) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/** Every Get node in `graph` bound to `name`, so a rename/removal on the
+ *  Setter side can refresh them immediately instead of waiting on their own
+ *  next poll/interaction. */
+function getSwitchboardGettersFor(graph, name) {
+  const getters = [];
+  for (const node of getGraphNodes(graph)) {
+    if (node.constructor && node.constructor.isSwitchboardGetNode && node.widgets?.[0]?.value === name) {
+      getters.push(node);
+    }
+  }
+  return getters;
+}
+
+class SwitchboardSetNode extends LGraphNode {
+  static nodeTitle = "Set";
+  static isSwitchboardSetNode = true;
+
+  constructor(title = SwitchboardSetNode.nodeTitle) {
+    super(title);
+    this.isVirtualNode = true; // never sent to the server; purely a wiring aid
+    this.serialize_widgets = true;
+    this.addInput("*", "*");
+    this._lastName = ""; // tracked ourselves: widget callbacks get the new value only
+    this.addWidget("text", "name", "", (value) => this._onRename(value), {});
+    this.size = [160, 60];
+  }
+
+  _graph() {
+    return this.graph || app.graph;
+  }
+
+  _retitle() {
+    const name = this.widgets[0].value;
+    this.title = name ? `Set: ${name}` : SwitchboardSetNode.nodeTitle;
+  }
+
+  /** Keep names unique -- two Setters sharing a name would make a Getter's
+   *  match ambiguous (silently picking whichever is found first), which is
+   *  exactly the kind of "works sometimes, not others" bug this is meant to
+   *  avoid, not introduce. Appends `_2`, `_3`, ... until it's free. */
+  _dedupeName(name) {
+    if (!name) return name;
+    const taken = new Set(
+      getGraphNodes(this._graph())
+        .filter((n) => n !== this && n.constructor && n.constructor.isSwitchboardSetNode)
+        .map((n) => n.widgets?.[0]?.value)
+        .filter(Boolean),
+    );
+    if (!taken.has(name)) return name;
+    let i = 2;
+    while (taken.has(`${name}_${i}`)) i++;
+    return `${name}_${i}`;
+  }
+
+  _onRename(value) {
+    const prevValue = this._lastName;
+    const deduped = this._dedupeName((value || "").trim());
+    this.widgets[0].value = deduped;
+    this._lastName = deduped;
+    this._retitle();
+    // Getters bound to the OLD name lose their Setter; refresh them so they
+    // show it immediately instead of silently pointing at nothing until their
+    // own combo is reopened.
+    for (const getter of getSwitchboardGettersFor(this._graph(), prevValue)) getter._refresh();
+    for (const getter of getSwitchboardGettersFor(this._graph(), deduped)) getter._refresh();
+  }
+
+  _refreshType() {
+    const link = this.inputs[0].link != null ? linkById(this._graph(), this.inputs[0].link) : null;
+    this.inputs[0].type = link ? link.type : "*";
+  }
+
+  onConnectionsChange(type) {
+    if (type !== LiteGraph.INPUT) return;
+    this._refreshType();
+    for (const getter of getSwitchboardGettersFor(this._graph(), this.widgets[0].value)) getter._refresh();
+  }
+
+  onConfigure() {
+    // A loaded workflow restores widgets_values directly, bypassing the
+    // callback above -- resync our own tracked copy so a later rename still
+    // finds the right "previous" name to refresh.
+    this._lastName = this.widgets[0].value;
+    this._retitle();
+  }
+
+  onRemoved() {
+    for (const getter of getSwitchboardGettersFor(this._graph(), this.widgets?.[0]?.value)) getter._refresh();
+  }
+}
+
+class SwitchboardGetNode extends LGraphNode {
+  static nodeTitle = "Get";
+  static isSwitchboardGetNode = true;
+
+  constructor(title = SwitchboardGetNode.nodeTitle) {
+    super(title);
+    this.isVirtualNode = true;
+    this.serialize_widgets = true;
+    this.addOutput("*", "*");
+    this.addWidget("combo", "name", "", () => this._refresh(), {
+      values: () => getSwitchboardSetterNames(this._graph()),
+    });
+    this.size = [160, 60];
+  }
+
+  _graph() {
+    return this.graph || app.graph;
+  }
+
+  _findSetter() {
+    const name = this.widgets[0].value;
+    if (!name) return null;
+    return getGraphNodes(this._graph()).find(
+      (n) => n.constructor && n.constructor.isSwitchboardSetNode && n.widgets?.[0]?.value === name,
+    );
+  }
+
+  _refresh() {
+    const setter = this._findSetter();
+    const name = this.widgets[0].value;
+    const type = setter ? setter.inputs[0].type : "*";
+    this.outputs[0].type = type;
+    this.outputs[0].name = type;
+    this.title = name ? `Get: ${name}${setter ? "" : " (missing)"}` : SwitchboardGetNode.nodeTitle;
+    this.setDirtyCanvas(true, true);
+  }
+
+  /** litegraph's hook for a virtual node to hand back the REAL link feeding
+   *  it, used when flattening the graph to a prompt. Returning the Setter's
+   *  own (unmodified) input link -- rather than fabricating a new one --
+   *  means this chains correctly even when that link's origin is itself
+   *  another virtual node (Set/Get or anything else): whatever resolves it
+   *  next just keeps following the same real link object. */
+  getInputLink(_slot) {
+    const setter = this._findSetter();
+    const linkId = setter?.inputs[0]?.link;
+    if (linkId == null) {
+      throw new Error(`Switchboard Get "${this.widgets[0].value}": no Set node is feeding a value in.`);
+    }
+    return linkById(this._graph(), linkId);
+  }
+
+  onConfigure() {
+    this._refresh();
+  }
+
+  onAdded() {
+    this._refresh();
+  }
+}
+
 app.registerExtension({
   name: "Switchboard.Controllers",
   registerCustomNodes() {
@@ -1486,6 +1669,18 @@ app.registerExtension({
       Cls.title = Cls.nodeTitle;
       Cls.collapsable = true;
       LiteGraph.registerNodeType(Cls.nodeTitle, Cls);
+      Cls.category = CATEGORY;
+    }
+  },
+});
+
+app.registerExtension({
+  name: "Switchboard.SetGet",
+  registerCustomNodes() {
+    for (const Cls of [SwitchboardSetNode, SwitchboardGetNode]) {
+      Cls.title = Cls.nodeTitle;
+      Cls.collapsable = true;
+      LiteGraph.registerNodeType(`Switchboard ${Cls.nodeTitle}`, Cls);
       Cls.category = CATEGORY;
     }
   },
@@ -1529,39 +1724,88 @@ function removeTagFromNode(node, tag) {
   );
 }
 
+/** Whether `node` should get the Tag/Remove-tag menu entries at all -- our own
+ *  Controllers can't be tag targets, same rule as Group/Node Controller. */
+function nodeWantsTagMenu(node) {
+  return !!node && !(node.constructor && node.constructor.isSwitchboardController);
+}
+
+/** The Tag… / Remove tag menu entries for `node`, shared by both places that
+ *  add them (see the two `registerExtension` blocks below). Each entry carries
+ *  `_switchboardTagEntry` so either path can tell "already added" from "not
+ *  added yet" and skip re-adding -- belt-and-suspenders against a double menu
+ *  item if BOTH paths manage to fire for the same node. */
+function buildTagMenuEntries(node) {
+  const targets = tagEditTargets(node);
+  const entries = [
+    {
+      content: targets.length > 1 ? `🎛️ Tag ${targets.length} selected nodes…` : "🎛️ Tag…",
+      _switchboardTagEntry: true,
+      callback: () => {
+        // eslint-disable-next-line no-alert -- quick text input is the
+        // established LiteGraph/ComfyUI idiom for this (rename, add label).
+        const value = prompt("Switchboard tag(s), comma-separated:", nodeTags(node).join(", "));
+        if (value == null) return; // cancelled
+        for (const n of targets) addTagsToNode(n, value);
+      },
+    },
+  ];
+  const tags = nodeTags(node);
+  if (tags.length) {
+    entries.push({
+      content: "🎛️ Remove tag",
+      _switchboardTagEntry: true,
+      has_submenu: true,
+      submenu: {
+        options: tags.map((tag) => ({
+          content: tag,
+          callback: () => {
+            for (const n of targets) removeTagFromNode(n, tag);
+          },
+        })),
+      },
+    });
+  }
+  return entries;
+}
+
 app.registerExtension({
   name: "Switchboard.Tags",
   nodeCreated(node) {
-    if (node.constructor && node.constructor.isSwitchboardController) return;
+    // Primary path: wraps this node instance's own getExtraMenuOptions, which
+    // ComfyUI's canvas always calls while building the node's context menu
+    // (verified against the shipped litegraph bundle: `getNodeMenuOptions`
+    // calls `node.getExtraMenuOptions?.(canvas, options)` and keeps whatever
+    // that call pushed into `options`, regardless of its return value -- the
+    // same push-don't-return contract the Controllers' own
+    // getExtraMenuOptions above relies on).
+    if (!nodeWantsTagMenu(node)) return;
     const orig = node.getExtraMenuOptions;
     node.getExtraMenuOptions = function (canvas, options) {
       orig?.apply(this, arguments);
-      const targets = tagEditTargets(this);
-      options.push({
-        content: targets.length > 1 ? `🎛️ Tag ${targets.length} selected nodes…` : "🎛️ Tag…",
-        callback: () => {
-          // eslint-disable-next-line no-alert -- quick text input is the
-          // established LiteGraph/ComfyUI idiom for this (rename, add label).
-          const value = prompt("Switchboard tag(s), comma-separated:", nodeTags(this).join(", "));
-          if (value == null) return; // cancelled
-          for (const n of targets) addTagsToNode(n, value);
-        },
-      });
-      const tags = nodeTags(this);
-      if (tags.length) {
-        options.push({
-          content: "🎛️ Remove tag",
-          has_submenu: true,
-          submenu: {
-            options: tags.map((tag) => ({
-              content: tag,
-              callback: () => {
-                for (const n of targets) removeTagFromNode(n, tag);
-              },
-            })),
-          },
-        });
+      if (!options.some((o) => o && o._switchboardTagEntry)) {
+        options.push(...buildTagMenuEntries(this));
       }
     };
   },
 });
+
+// Defence in depth, patched ONCE at module load (not once per node, unlike
+// the primary path above). Several installed custom-node packs also wrap
+// getExtraMenuOptions per node instance, and not all of them chain the
+// previous implementation before replacing it -- a pack that doesn't would
+// silently drop our addition for whichever node types it touches. Patching
+// the canvas-level getNodeMenuOptions as a second, independent path means the
+// Tag item still shows up when that happens, at the cost of a single,
+// much-rarer collision point instead of one per node type.
+if (typeof LGraphCanvas !== "undefined" && !LGraphCanvas.prototype.__switchboardPatchedNodeMenu) {
+  const origGetNodeMenuOptions = LGraphCanvas.prototype.getNodeMenuOptions;
+  LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
+    const options = origGetNodeMenuOptions.apply(this, arguments);
+    if (Array.isArray(options) && nodeWantsTagMenu(node) && !options.some((o) => o && o._switchboardTagEntry)) {
+      options.push(...buildTagMenuEntries(node));
+    }
+    return options;
+  };
+  LGraphCanvas.prototype.__switchboardPatchedNodeMenu = true;
+}

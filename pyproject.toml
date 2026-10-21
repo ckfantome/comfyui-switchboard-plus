@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-switchboard-plus"
 description = "ComfyUI Switchboard+ - toggle ComfyUI groups or individual nodes on/off (bypass or mute), manually or from a wired boolean, plus a runtime Execution Gate. A fork of Oratorian/comfyui-switchboard with hardened CI and an extra backend node; GPL-3.0."
-version = "1.3.0"
+version = "1.4.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 

@@ -1,3 +1,34 @@
+# 🎛️ Switchboard+ - v1.4.0
+
+## ✨ New: Set / Get
+A plain wiring convenience, not a Controller: **Set** names any input,
+**Get** outputs it elsewhere by name - no wire, no Controller involved. Both
+virtual; a Get resolves straight to the Set's real upstream link at queue
+time via litegraph's own `getInputLink` mechanism (verified against the
+shipped frontend bundle), so it chains through other Get/Set hops with no
+special-case code and the backend sees a normal direct link either way. Two
+Sets can't silently share a name - a clash gets `_2`, `_3`, ... appended so a
+Get's match is never ambiguous, and an unresolved Get errors by name at queue
+time instead of sending bad data. See
+[Set / Get](README.md#set--get).
+
+## 🔧 Hardened: Tag… menu item against other packs' menu patches
+The `🎛️ Tag…`/`🎛️ Remove tag` context-menu items are now added through a
+*second*, independent path - patching `LGraphCanvas.prototype.getNodeMenuOptions`
+once, rather than relying solely on the per-node-instance
+`node.getExtraMenuOptions` wrap added in v1.3.0. Some installed custom-node
+packs also monkeypatch `getExtraMenuOptions` per node instance without
+chaining the previous implementation first, which can silently drop another
+pack's menu additions for whichever node types that pack touches; the new
+path is independent of that chain, so the item still shows up when it
+happens. A dedup marker (`_switchboardTagEntry`) keeps the item from
+appearing twice when both paths fire normally.
+
+-# Front-end only - `git pull`, hard-reload the browser. No server restart
+-# needed for this release (Set/Get and the menu fix are both JS-only); the
+-# Execution Gate backend node from v1.2.0 still needs one if you haven't
+-# restarted since then.
+
 # 🎛️ Switchboard+ - v1.3.0
 
 ## ✨ New: Tag Controller
