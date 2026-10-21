@@ -5,10 +5,11 @@ README.md#attribution for what this fork changes.
 
 Two kinds of nodes ship here:
 
-- **Group Controller / Node Controller / Wired Controller** - client-side
-  ("virtual") LiteGraph nodes in ``js/switchboard.js``. They never execute on
-  the server; they just toggle node modes (active/bypass/mute) in the browser
-  graph.
+- **Group Controller / Node Controller / Tag Controller / Wired Controller** -
+  client-side ("virtual") LiteGraph nodes in ``js/switchboard.js``. They never
+  execute on the server; they just toggle node modes (active/bypass/mute) in
+  the browser graph. Tag Controller targets any set of nodes sharing a
+  ``properties.switchboardTags`` label, not just one group or node id.
 - **Value on Boolean / Boolean Switch / Execution Gate** - real backend nodes
   in ``nodes.py`` that move data (or block it) at runtime, so users get
   boolean->value, conditional routing, and runtime-computed gating without

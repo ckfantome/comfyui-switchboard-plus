@@ -13,14 +13,16 @@ pack.
 |------|----------------|----------------|
 | **Group Controller** | toggles groups, by **title** | the group titles in your graph |
 | **Node Controller** | toggles individual nodes, by **id** | nodes as `id: Title` |
+| **Tag Controller** | toggles **any set of nodes**, by a shared **tag** | the tags in use in your graph |
 | **Wired Controller** | relays booleans to Controllers, by **signal name** | - |
 | **Value on Boolean** | boolean -> one of two values (float/int/string) | - |
 | **Boolean Switch** | routes one of two **any-type** inputs, lazily | - |
 | **Execution Gate** | blocks every node downstream when a **runtime-computed** boolean is False | - |
 
-The three Controllers are client-side (they toggle node modes in the browser);
+The four Controllers are client-side (they toggle node modes in the browser);
 the three utilities are real backend nodes (they move data, or block it, at
-runtime). See [Wired Controller](#wired-controller) and
+runtime). See [Tag Controller](#tag-controller),
+[Wired Controller](#wired-controller) and
 [Bundled boolean utilities](#bundled-boolean-utilities).
 
 ## Install
@@ -52,6 +54,34 @@ Above: the **`ALL`** master toggle is set to **disabled**, yet node **`8: VAE
 Decode`** is still **enabled** - because a **Boolean** (`true`) is wired to it.
 **A connected boolean overrides the `ALL` broadcast.** This is the key behaviour,
 described in full below.
+
+## Tag Controller
+
+A Group targets one group by title; a Node targets one node by id. **Tag**
+targets neither - it targets **a label you put on as many nodes as you like,
+anywhere in the graph**, so one switch can bypass/mute a scattered set of nodes
+that don't share a group and aren't next to each other. Built for the graph
+that's grown past tidy groups: a complex pipeline where "turn off the
+face-detail pass" means three nodes in three different places.
+
+**Tagging a node:** right-click any node (or **select several and right-click
+one of them** - the tag applies to the whole selection) -> **🎛️ Tag…** -> type
+one or more tags, comma-separated. A node can carry several tags at once, and a
+tag can be on as many nodes as you like; it's a many-to-many label, not a single
+group membership. Right-click again to see **🎛️ Remove tag** and the node's
+current tags.
+
+**Controlling by tag:** add a **Tag Controller**, same as a Group/Node
+Controller - its **Add** list shows every tag currently in use (anywhere in
+this graph). Each added tag gets its own on/off toggle, `↳ disable as`,
+`⇄ input` and `BOOLEAN` input slot, exactly like a Group/Node target; applying
+it sets the mode of **every node carrying that tag**. Removing a tag from the
+Controller doesn't untag the nodes - it just stops controlling them.
+
+Tags are stored on the node itself (`properties.switchboardTags`), so they
+survive save/load and aren't tied to any one Controller - the same tag can
+drive several Tag Controllers, and a node keeps its tags even with no
+Controller targeting them yet.
 
 ## Putting it together - complex conditional control
 
@@ -296,6 +326,8 @@ v1.1.7, licensed GPL-3.0 (see [LICENSE](LICENSE)). All credit for the original
 Group/Node/Wired Controllers, Value on Boolean and Boolean Switch design goes
 to that project. Changes made in this fork:
 
+- Added the **Tag Controller** (toggle any scattered set of nodes by a shared
+  tag, not just one group/node) - see [above](#tag-controller).
 - Added the **Execution Gate** backend node (runtime-computed boolean gating
   via `ExecutionBlocker`) - see [above](#execution-gate).
 - Hardened `.github/workflows/release.yml`: dropped the Comfy-Registry publish
@@ -313,19 +345,22 @@ if they aren't specific to the changes above.
 
 - **Node Controller targets by id.** Nodes are matched by their stable id, so
   retitling a controlled node still works; the `id: Title` label is captured when
-  you add it. Controllers can't target other controllers.
+  you add it. Controllers can't target other controllers (and a tag on a
+  Controller node is likewise ignored by every Tag Controller).
 - **Survives save/load.** All state lives in node properties and is re-applied at
   queue time. Older saved Group Controllers are auto-migrated to the current
   format.
 - **Subgraph-aware.** A controller operates on the graph it sits in, so a
-  controller placed inside a subgraph targets that subgraph's own groups/nodes
+  controller placed inside a subgraph targets that subgraph's own groups/nodes/tags
   (and its `Add…` list shows those, not the outer graph's). To drive an
   in-subgraph controller from outside, expose a `BOOLEAN` as a **subgraph input**
   and wire your boolean to it - the controller traces that input back across the
   subgraph boundary to read the value (so only the boolean crosses; the
-  controller keeps holding the inner node/group id). Nested subgraphs work too.
-  To switch a **whole** subgraph instead, target the subgraph node itself with a
-  Node Controller from the parent graph.
+  controller keeps holding the inner node/group/tag it targets). Nested subgraphs
+  work too. To switch a **whole** subgraph instead, target the subgraph node
+  itself with a Node Controller from the parent graph. A **Tag Controller only
+  ever sees tags on nodes in its own graph** - the same tag used inside two
+  different subgraphs is two independent targets, one per Tag Controller.
 - **For control *across* subgraph boundaries, prefer the
   [Wired Controller](#wired-controller).** Direct cross-boundary boolean reads
   are best-effort and can get confused with several subgraphs in play; the Wired
@@ -334,7 +369,7 @@ if they aren't specific to the changes above.
 
 ## Nodes 2.0 compatibility
 
-The three **Controllers** (Group, Node and Wired) are client-side (virtual)
+The four **Controllers** (Group, Node, Tag and Wired) are client-side (virtual)
 nodes built on the legacy LiteGraph API - the same class of node as rgthree's
 group tools. (The **Value on Boolean** and **Boolean Switch** utilities are
 ordinary backend nodes and aren't affected by any of this.) ComfyUI's **Nodes 2.0** (Vue renderer) is currently

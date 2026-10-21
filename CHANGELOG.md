@@ -1,3 +1,22 @@
+# 🎛️ Switchboard+ - v1.3.0
+
+## ✨ New: Tag Controller
+A fourth Controller alongside Group/Node/Wired: toggle **any set of nodes
+sharing a tag**, not just one group or one node id. Right-click any node (or a
+multi-selection) -> **🎛️ Tag…** to label it; add a **Tag Controller** and its
+**Add** list shows every tag in use, each with its own on/off toggle, `↳
+disable as`, `⇄ input` and `BOOLEAN` input, exactly like a Group/Node target -
+applying one flips every node carrying that tag, anywhere in the graph (same
+subgraph-scoping rules as Group/Node). Tags live on the node itself
+(`properties.switchboardTags`), so they survive save/load and can drive
+several Tag Controllers at once. See the README's
+[Tag Controller](README.md#tag-controller) section.
+
+-# Update via `git pull` in `custom_nodes/comfyui-switchboard-plus` and
+-# hard-reload the browser (front-end only change - no server restart needed
+-# for this one, but Execution Gate below still needs one if you're updating
+-# from before v1.2.0).
+
 # 🎛️ Switchboard+ - v1.2.0
 
 First release of this fork ([Attribution](README.md#attribution)). Based on

@@ -113,6 +113,50 @@ function applyModeToGroup(graph, key, mode) {
   }
 }
 
+// ---- tag targets ------------------------------------------------------------
+//
+// A tag spans nodes anywhere in the graph (unlike a Group's one title or a
+// Node Controller's one id), so one Tag Controller target can bypass/mute an
+// arbitrary, non-contiguous set of nodes at once -- handy in a complex graph
+// where the "same switch" needs to reach nodes that aren't in one group.
+// Tags live in `node.properties.switchboardTags` (array of strings), set via
+// the "🎛️ Tag…" context-menu item added to every node below.
+
+/** Read `node`'s Switchboard tags, tolerating a missing/malformed property. */
+function nodeTags(node) {
+  const tags = node && node.properties && node.properties.switchboardTags;
+  return Array.isArray(tags) ? tags.filter((t) => typeof t === "string" && t) : [];
+}
+
+function setNodeTags(node, tags) {
+  if (!node.properties) node.properties = {};
+  node.properties.switchboardTags = [...new Set(tags)];
+}
+
+/** Every distinct tag present on any (non-controller) node in `graph`. */
+function getTagChoices(graph) {
+  const seen = new Set();
+  const choices = [];
+  for (const node of getGraphNodes(graph)) {
+    if (node.constructor && node.constructor.isSwitchboardController) continue;
+    for (const tag of nodeTags(node)) {
+      if (!seen.has(tag)) {
+        seen.add(tag);
+        choices.push({ key: tag, label: tag });
+      }
+    }
+  }
+  return choices;
+}
+
+/** Set the mode of every node in `graph` carrying `tag`. */
+function applyModeToTag(graph, tag, mode) {
+  for (const node of getGraphNodes(graph)) {
+    if (node.constructor && node.constructor.isSwitchboardController) continue;
+    if (nodeTags(node).includes(tag)) node.mode = mode;
+  }
+}
+
 // ---- node targets ----------------------------------------------------------
 
 function getGraphNodes(graph) {
@@ -1101,6 +1145,24 @@ class NodeControllerNode extends BaseControllerNode {
 }
 NodeControllerNode.nodeTitle = "Node Controller";
 
+class TagControllerNode extends BaseControllerNode {
+  static targetWord = "tag";
+  static isSwitchboardController = true;
+
+  constructor(title = TagControllerNode.nodeTitle) {
+    super(title);
+  }
+
+  _allChoices() {
+    return getTagChoices(this._graph());
+  }
+
+  _applyTo(key, mode) {
+    applyModeToTag(this._graph(), key, mode);
+  }
+}
+TagControllerNode.nodeTitle = "Tag Controller";
+
 // ---- Wired Controller (source) ---------------------------------------------
 
 /**
@@ -1420,11 +1482,86 @@ WiredControllerNode.nodeTitle = "Wired Controller";
 app.registerExtension({
   name: "Switchboard.Controllers",
   registerCustomNodes() {
-    for (const Cls of [GroupControllerNode, NodeControllerNode, WiredControllerNode]) {
+    for (const Cls of [GroupControllerNode, NodeControllerNode, TagControllerNode, WiredControllerNode]) {
       Cls.title = Cls.nodeTitle;
       Cls.collapsable = true;
       LiteGraph.registerNodeType(Cls.nodeTitle, Cls);
       Cls.category = CATEGORY;
     }
+  },
+});
+
+// ---- tag assignment (any node) ---------------------------------------------
+//
+// The context-menu side of tagging: added to every node (our own Controllers
+// excepted -- they can't be tag targets, same as Group/Node Controller). Right
+// click picks up the current canvas multi-selection, so tagging several nodes
+// at once -- the whole point in a big, non-contiguous graph -- is one prompt,
+// not one per node.
+
+/** The nodes a tag edit on `node` should affect: the full multi-selection when
+ *  `node` is part of it (so right-clicking any one of several selected nodes
+ *  tags all of them), otherwise just `node` alone. */
+function tagEditTargets(node) {
+  const selected = app.canvas && app.canvas.selected_nodes;
+  if (selected && selected[node.id] != null) {
+    const nodes = Object.values(selected).filter(
+      (n) => !(n && n.constructor && n.constructor.isSwitchboardController),
+    );
+    if (nodes.length > 1) return nodes;
+  }
+  return [node];
+}
+
+function addTagsToNode(node, raw) {
+  const additions = String(raw || "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (!additions.length) return;
+  setNodeTags(node, [...nodeTags(node), ...additions]);
+}
+
+function removeTagFromNode(node, tag) {
+  setNodeTags(
+    node,
+    nodeTags(node).filter((t) => t !== tag),
+  );
+}
+
+app.registerExtension({
+  name: "Switchboard.Tags",
+  nodeCreated(node) {
+    if (node.constructor && node.constructor.isSwitchboardController) return;
+    const orig = node.getExtraMenuOptions;
+    node.getExtraMenuOptions = function (canvas, options) {
+      orig?.apply(this, arguments);
+      const targets = tagEditTargets(this);
+      options.push({
+        content: targets.length > 1 ? `🎛️ Tag ${targets.length} selected nodes…` : "🎛️ Tag…",
+        callback: () => {
+          // eslint-disable-next-line no-alert -- quick text input is the
+          // established LiteGraph/ComfyUI idiom for this (rename, add label).
+          const value = prompt("Switchboard tag(s), comma-separated:", nodeTags(this).join(", "));
+          if (value == null) return; // cancelled
+          for (const n of targets) addTagsToNode(n, value);
+        },
+      });
+      const tags = nodeTags(this);
+      if (tags.length) {
+        options.push({
+          content: "🎛️ Remove tag",
+          has_submenu: true,
+          submenu: {
+            options: tags.map((tag) => ({
+              content: tag,
+              callback: () => {
+                for (const n of targets) removeTagFromNode(n, tag);
+              },
+            })),
+          },
+        });
+      }
+    };
   },
 });
